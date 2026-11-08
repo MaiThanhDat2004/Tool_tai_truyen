@@ -368,6 +368,9 @@ def is_chapter_scrambled(page, chapter_url, site_host, sink):
     return False                                  # img CDN truc tiep -> khong xao
 
 
+PROFILE_DIR = Path.home() / ".tool_tai_truyen" / "comix_profile"
+
+
 def run(args):
     try:
         from playwright.sync_api import sync_playwright
@@ -377,11 +380,26 @@ def run(args):
     base = f"{urlparse(args.url).scheme}://{urlparse(args.url).netloc}"
     site_host = urlparse(args.url).netloc
 
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    is_headless = bool(getattr(args, "headless", False))
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not args.headful)
-        ctx = browser.new_context(user_agent=UA, viewport={"width": 1400, "height": 1000},
-                                  device_scale_factor=2)        # chup net hon
-        page = ctx.new_page()
+        # Uu tien dung Google Chrome that tren may + profile luu tru de vuot Cloudflare Turnstile
+        launch_kwargs = {
+            "user_data_dir": str(PROFILE_DIR),
+            "headless": is_headless,
+            "viewport": {"width": 1400, "height": 1000},
+            "device_scale_factor": 2,
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        try:
+            ctx = p.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+        except Exception:
+            ctx = p.chromium.launch_persistent_context(**launch_kwargs)
+
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
         sink = []
         # Bat MOI request (anh tai qua 'image' LAN 'fetch'->blob deu can)
         page.on("request", lambda r: sink.append(r.url))
@@ -394,16 +412,23 @@ def run(args):
                 page.goto(args.url, wait_until="domcontentloaded", timeout=15000)
             except Exception:
                 pass
-        page.wait_for_timeout(2500)
-        if page.query_selector('.wafcap__frame, iframe[src*="@waf/challenge"]'):
-            print("  [CHU Y] comix.to dang yeu cau xac minh WAF Captcha / Cloudflare.")
-            print("  Neu khong tai duoc, hay thu chay voi tham so: --headful de xac minh truc tiep.")
+        page.wait_for_timeout(2000)
+
+        # Cho toi da 20 giay de Cloudflare Turnstile tu xac minh xong tren cua so Chrome
+        for i in range(20):
+            if page.query_selector("a[href*='-chapter-']"):
+                break
+            if page.query_selector('.wafcap__frame, iframe[src*="@waf/challenge"]'):
+                if i == 0:
+                    print("  Dang cho Cloudflare Turnstile xac minh tren cua so Chrome (3-5 giay)...")
+            page.wait_for_timeout(1000)
+
         title = re.sub(r"\s*[-|].*$", "", page.title()).strip() or tq.slugify(args.url)
 
         chmap = enumerate_chapters(page, base)
         if not chmap:
             print("Khong lay duoc danh sach chuong.")
-            browser.close()
+            ctx.close()
             sys.exit(2)
 
         chapters = sorted(chmap.items(), key=lambda kv: float(kv[0]))
@@ -426,13 +451,13 @@ def run(args):
             print(f"  So chuong: {len(chapters)}{rng}")
             print(f"  Anh bi xao tron: {'CO -> phai CHUP (cham hon)' if scr else 'KHONG -> tai thang (nhanh)'}")
             print("===========================================")
-            browser.close()
+            ctx.close()
             return
 
         if args.list:
             for n, u in sel:
                 print(f"  Ch {n}")
-            browser.close()
+            ctx.close()
             return
 
         out_dir = Path(args.out) / tq.slugify(title)
@@ -469,7 +494,7 @@ def run(args):
                 print(f"      LOI: {e}")
             time.sleep(args.delay)
 
-        browser.close()
+        ctx.close()
     print("\nXong!")
 
 
@@ -485,7 +510,10 @@ def build_parser():
                    choices=["folder", "cbz", "pdf", "stitch"])
     p.add_argument("--out", default="downloads")
     p.add_argument("--delay", type=float, default=0.5)
-    p.add_argument("--headful", action="store_true", help="Hien trinh duyet")
+    p.add_argument("--headful", action="store_true", default=True,
+                   help="Hien trinh duyet (mac dinh: giup vuot Cloudflare)")
+    p.add_argument("--headless", action="store_true",
+                   help="Chay an (khong hien cua so, co the bi Cloudflare WAF chan)")
     p.add_argument("--overwrite", action="store_true")
     return p
 
