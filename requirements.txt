@@ -1,0 +1,3 @@
+playwright>=1.44
+websocket-client>=1.7
+Pillow>=10.0

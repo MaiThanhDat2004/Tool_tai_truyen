@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# User data & downloaded manga
+downloads/
+*.part
+.progress.json
+
+# Logs and temporary test files
+*.log
+test_*
+_t*
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
