@@ -350,10 +350,8 @@ def is_chapter_scrambled(page, chapter_url, site_host, sink):
     target = min(3, total)                        # trang noi dung (tranh bia)
     before = {u for u in sink if is_content_img(u, site_host)}
     if total > 1:
-        page.evaluate(_OPEN_SETTINGS)
-        page.wait_for_timeout(150)
         page.evaluate(_GOTO_PAGE, target)
-        page.evaluate(_CLOSE_SETTINGS)
+        page.wait_for_timeout(250)
     for _ in range(25):                           # cho trang noi dung tai
         page.wait_for_timeout(200)
         if any(is_content_img(u, site_host) and u not in before for u in sink):
