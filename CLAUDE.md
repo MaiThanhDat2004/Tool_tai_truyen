@@ -11,6 +11,10 @@ SPA chống cào, xáo trộn ảnh...).
   hợp bài toán + cách giải cho từng site. **Cập nhật file đó khi thêm/sửa kỹ thuật.**
 - [README.md](README.md) là hướng dẫn cho người dùng cuối.
 
+## NGUYÊN TẮC BẮT BUỘC (QUAN TRỌNG NHẤT)
+1. **Tuân thủ đúng yêu cầu chỉ định**: Tuyệt đối KHÔNG tự tiện can thiệp hoặc chỉnh sửa bất kỳ file nào khi chưa được phép; nếu thấy cần sửa phải hỏi trước.
+2. **Đối chiếu commit trước khi sửa logic**: Khi cần sửa logic, bắt buộc phải xem lại commit lịch sử (`git log`, `git diff`) để đối chiếu thật kỹ rồi mới chỉnh sửa.
+
 ## Môi trường (QUAN TRỌNG)
 - **Windows**, shell PowerShell. Chạy Python qua **venv**:
   `./.venv/Scripts/python.exe ...` (Bash dùng `/`, PowerShell dùng `.\.venv\Scripts\python.exe`).
