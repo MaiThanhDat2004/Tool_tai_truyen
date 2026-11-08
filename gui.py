@@ -93,8 +93,16 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Manga Downloader Pro — Bộ công cụ Tải & Biên tập Truyện tranh")
-        self.geometry("1060x780")
-        self.minsize(880, 660)
+        
+        # Tự động canh giữa và co giãn theo độ phân giải màn hình
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        w = min(1040, max(820, int(screen_w * 0.85)))
+        h = min(730, max(580, int(screen_h * 0.85)))
+        x = max(0, (screen_w - w) // 2)
+        y = max(0, (screen_h - h) // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.minsize(780, 560)
         self.configure(bg=BG_APP)
 
         self.proc = None
@@ -109,8 +117,8 @@ class App(tk.Tk):
         self.after(60, self._drain_log)
         self.after(100, self._bring_front)
 
-        # Quét thư viện lần đầu
-        self.after(500, self._refresh_library)
+        # Quét thư viện lần đầu an toàn
+        self.after(400, self._refresh_library)
 
     def _setup_style(self):
         st = ttk.Style(self)
@@ -225,11 +233,10 @@ class App(tk.Tk):
                foreground=[("active", TEXT_MAIN)])
 
     def _bring_front(self):
+        """Đưa cửa sổ lên phía trước một cách an toàn."""
         try:
             self.lift()
-            self.attributes("-topmost", True)
             self.focus_force()
-            self.after(600, lambda: self.attributes("-topmost", False))
         except Exception:
             pass
 
@@ -613,43 +620,48 @@ class App(tk.Tk):
                    command=self._cleanup_temp).pack(side="right", padx=2)
 
     def _refresh_library(self):
-        for item in self.lib_tree.get_children():
-            self.lib_tree.delete(item)
+        try:
+            for item in self.lib_tree.get_children():
+                self.lib_tree.delete(item)
 
-        out = Path(self.outdir.get().strip() or str(HERE / "downloads"))
-        if not out.exists():
-            return
+            out = Path(self.outdir.get().strip() or str(HERE / "downloads"))
+            if not out.exists():
+                return
 
-        series_dirs = sorted([d for d in out.iterdir() if d.is_dir()],
-                             key=lambda d: d.name.lower())
+            series_dirs = sorted([d for d in out.iterdir() if d.is_dir()],
+                                 key=lambda d: d.name.lower())
 
-        for d in series_dirs:
-            chapters = [c for c in d.iterdir() if c.is_dir() and not c.name.endswith("(scripts)") and not c.name.endswith("(edited)")]
-            cbzs = list(d.glob("*.cbz"))
-            pdfs = list(d.glob("*.pdf"))
+            for d in series_dirs:
+                try:
+                    chapters = [c for c in d.iterdir() if c.is_dir() and not c.name.endswith("(scripts)") and not c.name.endswith("(edited)")]
+                    cbzs = list(d.glob("*.cbz"))
+                    pdfs = list(d.glob("*.pdf"))
 
-            # Tính sơ bộ dung lượng
-            total_size = 0
-            for root, _, files in os.walk(d):
-                for f in files:
+                    total_size = 0
+                    for root, _, files in os.walk(d):
+                        for f in files:
+                            try:
+                                total_size += (Path(root) / f).stat().st_size
+                            except OSError:
+                                pass
+
                     try:
-                        total_size += (Path(root) / f).stat().st_size
-                    except OSError:
-                        pass
+                        mtime = datetime.fromtimestamp(d.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
+                    except Exception:
+                        mtime = "N/A"
 
-            try:
-                mtime = datetime.fromtimestamp(d.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
-            except Exception:
-                mtime = "N/A"
-
-            self.lib_tree.insert("", "end", values=(
-                d.name,
-                f"{len(chapters)} chương",
-                f"{len(cbzs)} file" if cbzs else "—",
-                f"{len(pdfs)} file" if pdfs else "—",
-                format_size(total_size),
-                mtime
-            ))
+                    self.lib_tree.insert("", "end", values=(
+                        d.name,
+                        f"{len(chapters)} chương",
+                        f"{len(cbzs)} file" if cbzs else "—",
+                        f"{len(pdfs)} file" if pdfs else "—",
+                        format_size(total_size),
+                        mtime
+                    ))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _get_selected_series_path(self):
         sel = self.lib_tree.selection()
@@ -1467,4 +1479,24 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    try:
+        app = App()
+        app.mainloop()
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        try:
+            with open(HERE / "gui_crash.log", "w", encoding="utf-8") as f:
+                f.write(err_msg)
+        except Exception:
+            pass
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Lỗi khởi chạy GUI", f"Gặp lỗi khi chạy giao diện:\n\n{err_msg}")
+            root.destroy()
+        except Exception:
+            pass
+        sys.exit(1)
