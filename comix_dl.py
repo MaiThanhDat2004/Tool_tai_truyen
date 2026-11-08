@@ -136,9 +136,9 @@ def enumerate_chapters(page, base):
         r = page.evaluate(JS_NEXT)
         if not r.get("clicked"):          # het trang (Next bi khoa)
             break
-        # Cho trang moi render them chuong (toi da 3 giay)
-        for _ in range(15):
-            page.wait_for_timeout(200)
+        # Cho trang moi render them chuong (polling nhanh 40ms)
+        for _ in range(30):
+            page.wait_for_timeout(40)
             collect()
             if len(found) > before:
                 break
