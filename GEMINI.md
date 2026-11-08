@@ -10,3 +10,4 @@
   1. **BẮT BUỘC ĐỐI CHIẾU VỚI LỊCH SỬ COMMIT**: Dùng `git log`, `git show`, `git diff` kiểm tra lại logic gốc ban đầu thật kỹ càng.
   2. Xem xét kỹ sự tương thích với các module khác (crawler, anti-bot, headless browser, CDP, parser).
   3. Tuyệt đối không tự ý viết lại hoặc xóa bỏ logic sẵn có khi chưa đối chiếu và chưa được người dùng phê duyệt.
+

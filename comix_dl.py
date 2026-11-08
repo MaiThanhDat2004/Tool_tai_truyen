@@ -68,8 +68,8 @@ def ext_from(ctype, data):
 
 
 def download_img(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA,
-                                               "Referer": "https://comix.to/"})
+    # Khong gui Referer: https://comix.to/ vi CDN anh comix se chan 403 Forbidden
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=60) as r:
         data = r.read()
         return data, r.headers.get("content-type", "")
@@ -80,21 +80,31 @@ def download_img(url):
 # --------------------------------------------------------------------------- #
 
 # Bam 'Next page' cua DUNG pager chua danh sach chuong, bang JS (vuot overlay
-# quang cao chan click). Tra ve {clicked, active}.
+# quang cao chan click). Ho tro ca nut Next ro rang lan nut so trang tiep theo.
 JS_NEXT = r"""() => {
-  const pagers = [...document.querySelectorAll('.npager')];
+  const pagers = [...document.querySelectorAll('.npager, [class*="pager"], [class*="pagination"]')];
   for (const pg of pagers) {
     let root = pg;
     for (let i = 0; i < 7 && root.parentElement; i++) root = root.parentElement;
     if (root.querySelector("a[href*='-chapter-']")) {
-      const act = pg.querySelector('.npager__num.is-active');
-      const nxt = pg.querySelector(".npager__nav[aria-label='Next page']");
-      const a = act ? act.textContent.trim() : '';
+      // 1. Thu tim nut Next ro rang neu co
+      const nxt = pg.querySelector(".npager__nav[aria-label='Next page'], [aria-label*='Next'], [aria-label*='next']");
       if (nxt && !nxt.disabled && !(nxt.className || '').includes('disabled')) {
         nxt.click();
-        return { clicked: true, active: a };
+        return { clicked: true };
       }
-      return { clicked: false, active: a };
+      // 2. Thu tim nut so trang tiep theo (sibling ngay sau active)
+      const act = pg.querySelector('.npager__num.is-active, [aria-current="page"], .is-active, .active');
+      if (act) {
+        let sib = act.nextElementSibling;
+        while (sib && sib.tagName !== 'BUTTON' && sib.tagName !== 'A') {
+          sib = sib.nextElementSibling;
+        }
+        if (sib && !sib.disabled && !(sib.className || '').includes('disabled')) {
+          sib.click();
+          return { clicked: true };
+        }
+      }
     }
   }
   return { clicked: false, active: 'no-pager' };
@@ -113,15 +123,25 @@ def enumerate_chapters(page, base):
             if m:
                 found[m.group(1)] = urljoin(base, h)
 
-    collect()
+    # Cho trang tai xong danh sach chuong ban dau (toi da 10 giay)
+    for _ in range(20):
+        collect()
+        if found:
+            break
+        page.wait_for_timeout(500)
+
     no_growth = 0
     for _ in range(400):                  # an toan
         before = len(found)
         r = page.evaluate(JS_NEXT)
         if not r.get("clicked"):          # het trang (Next bi khoa)
             break
-        page.wait_for_timeout(1400)
-        collect()
+        # Cho trang moi render them chuong (toi da 3 giay)
+        for _ in range(15):
+            page.wait_for_timeout(200)
+            collect()
+            if len(found) > before:
+                break
         if len(found) == before:
             no_growth += 1
             if no_growth >= 3:            # 3 lan lien khong them -> dung
@@ -169,31 +189,46 @@ JS_PAGE_EL = r"""() => {
   return best || fb;
 }"""
 
-_OPEN_SETTINGS = (
-    "() => { const el=[...document.querySelectorAll('button,[role=button],[aria-label]')]"
-    ".find(e => (e.getAttribute('aria-label')||e.textContent||'').trim()==='Settings');"
-    " if (el) el.click(); }")
-_GOTO_PAGE = (
-    "(n) => { const el=[...document.querySelectorAll('[aria-label]')]"
-    ".find(e => e.getAttribute('aria-label')==='Go to page '+n); if (el) el.click(); }")
-_CLOSE_SETTINGS = (
-    "() => { const el=[...document.querySelectorAll('[aria-label]')]"
-    ".find(e => (e.getAttribute('aria-label')||'')==='Close settings'); if (el) el.click(); }")
+_GOTO_PAGE = r"""(n) => {
+  // 1. Thu click truc tiep nut tren thanh tien trinh (rpage-progress__seg)
+  const direct = document.querySelector('[aria-label="Go to page ' + n + '"]');
+  if (direct) {
+    direct.click();
+    return true;
+  }
+  // 2. Neu khong co, mo menu Settings roi click (cho phien ban cu)
+  const setBtn = [...document.querySelectorAll('button,[role=button],[aria-label]')]
+    .find(e => (e.getAttribute('aria-label')||e.textContent||'').trim()==='Settings');
+  if (setBtn) {
+    setBtn.click();
+    const inSet = [...document.querySelectorAll('[aria-label]')]
+      .find(e => e.getAttribute('aria-label')==='Go to page '+n);
+    if (inSet) inSet.click();
+    const closeBtn = [...document.querySelectorAll('[aria-label]')]
+      .find(e => (e.getAttribute('aria-label')||'')==='Close settings');
+    if (closeBtn) closeBtn.click();
+    return true;
+  }
+  return false;
+}"""
 
 
 def capture_chapter(page, chapter_url, site_host, sink, ch_dir):
     """Lat qua tung trang (tin cay - bat anh CDN moi de biet trang da tai), roi
     MOI TRANG TU CHON cach lay anh:
-      - img src CDN truc tiep  -> tai thang (urllib)  : nhanh, file webp nhe.
-      - img src blob:          -> fetch bytes trong trang.
-      - canvas / khac          -> CHUP screenshot (truong hop bi xao tron).
+      - img src CDN truc tiep  -> tai thang (urllib, khong Referer) : nhanh, file webp nhe.
+      - fetch blob / in-page   -> fetch bytes trong trang.
+      - canvas / loi           -> CHUP screenshot (truong hop bi xao tron).
     Nho the: bo KHONG xao -> phan lon tai thang (nhanh); bo bi xao -> tu chup."""
     import base64
     sink.clear()
     try:
-        page.goto(chapter_url, wait_until="networkidle", timeout=90000)
+        page.goto(chapter_url, wait_until="networkidle", timeout=30000)
     except Exception:
-        pass
+        try:
+            page.goto(chapter_url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            pass
     page.wait_for_timeout(2000)
     total = page.evaluate(JS_TOTAL) or 1
     ch_dir.mkdir(parents=True, exist_ok=True)
@@ -201,11 +236,8 @@ def capture_chapter(page, chapter_url, site_host, sink, ch_dir):
     saved, seen, idx = [], set(), 1
     for n in range(1, total + 1):
         if total > 1:
-            page.evaluate(_OPEN_SETTINGS)
-            page.wait_for_timeout(140)
             page.evaluate(_GOTO_PAGE, n)
-            page.evaluate(_CLOSE_SETTINGS)
-            page.wait_for_timeout(150)
+            page.wait_for_timeout(200)
         # cho trang moi tai (xuat hien 1 anh CDN moi) -> tin hieu trang da san sang
         for _ in range(30):
             page.wait_for_timeout(200)
@@ -214,7 +246,7 @@ def capture_chapter(page, chapter_url, site_host, sink, ch_dir):
                     if is_content_img(u, site_host):
                         seen.add(u)
                 break
-        page.wait_for_timeout(700)              # cho ve / giai xao xong
+        page.wait_for_timeout(600)              # cho ve / giai xao xong
         info = page.evaluate(JS_MAIN_INFO) or {}
         src = info.get("src", "") if info.get("tag") == "img" else ""
         data, ct = b"", ""
@@ -226,6 +258,14 @@ def capture_chapter(page, chapter_url, site_host, sink, ch_dir):
                 data, ct = base64.b64decode(page.evaluate(_JS_FETCH_BLOB, src)), ""
         except Exception:
             data = b""
+        # 1.5) Neu urllib fail (vd bi chan hoac 403), thu fetch ngay trong trang (in-page fetch)
+        if len(data) < 800 and src.startswith("http"):
+            try:
+                b64 = page.evaluate(_JS_FETCH_BLOB, src)
+                if b64:
+                    data, ct = base64.b64decode(b64), ""
+            except Exception:
+                pass
         # 2) khong duoc (canvas / loi) -> CHUP man hinh (luon co anh -> khong sot trang)
         if len(data) < 800:
             try:
@@ -299,9 +339,12 @@ def is_chapter_scrambled(page, chapter_url, site_host, sink):
     img src CDN truc tiep = khong xao (tai thang duoc)."""
     sink.clear()
     try:
-        page.goto(chapter_url, wait_until="networkidle", timeout=90000)
+        page.goto(chapter_url, wait_until="networkidle", timeout=30000)
     except Exception:
-        pass
+        try:
+            page.goto(chapter_url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            pass
     page.wait_for_timeout(2200)
     total = page.evaluate(JS_TOTAL) or 1
     target = min(3, total)                        # trang noi dung (tranh bia)
@@ -346,8 +389,17 @@ def run(args):
         page.on("request", lambda r: sink.append(r.url))
 
         print("Dang mo trang & lay danh sach chuong...")
-        page.goto(args.url, wait_until="networkidle", timeout=90000)
+        try:
+            page.goto(args.url, wait_until="networkidle", timeout=30000)
+        except Exception:
+            try:
+                page.goto(args.url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                pass
         page.wait_for_timeout(2500)
+        if page.query_selector('.wafcap__frame, iframe[src*="@waf/challenge"]'):
+            print("  [CHU Y] comix.to dang yeu cau xac minh WAF Captcha / Cloudflare.")
+            print("  Neu khong tai duoc, hay thu chay voi tham so: --headful de xac minh truc tiep.")
         title = re.sub(r"\s*[-|].*$", "", page.title()).strip() or tq.slugify(args.url)
 
         chmap = enumerate_chapters(page, base)

@@ -22,3 +22,4 @@ Trước khi thay đổi bất kỳ đoạn logic nào (thuật toán, tham số
    - Đối chiếu với tài liệu `THUAT_TOAN.md` và `README.md` xem logic đó có đang giải quyết vấn đề chống bot / chặn DNS / định dạng đặc biệt nào không.
 3. **Báo cáo và xin phép**:
    - Giải thích ngắn gọn logic hiện tại là gì, logic dự kiến thay đổi là gì, có rủi ro nào không, và xin ý kiến người dùng trước khi áp dụng.
+

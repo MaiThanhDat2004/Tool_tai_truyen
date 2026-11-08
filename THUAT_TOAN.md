@@ -262,12 +262,13 @@ GraPara! (ch1=40, ch2=28, ch120=19), Dandadan (250 chương, ch1=62), Witch Hat 
 **Không forge token/giải mã** — để JS của trang làm, mình thu hoạch:
 
 1. **Danh sách chương:** đọc từ DOM (link `-chapter-N`), **bấm phân trang bằng JS**
-   (`element.click()` xuyên qua overlay quảng cáo). Dừng khi "Next page" bị khóa
-   hoặc 3 lần không thêm chương mới. (Lấy đủ ví dụ 125 chương GraPara.)
+   (`element.click()` xuyên qua overlay quảng cáo). Hỗ trợ cả nút "Next page" lẫn nút số trang
+   kế tiếp (`nextElementSibling` của `.is-active`), có vòng lặp chờ động (polling tối đa 3s)
+   cho Vue/Nuxt render xong. Dừng khi hết trang hoặc 3 lần không thêm chương mới. Sau đó Python
+   tự sắp xếp tăng dần từ Chapter 1..N.
 
-2. **Đi qua từng trang reader:** nút "Go to page N" nằm trong **menu Settings** (đóng
-   lại sau mỗi click) → mỗi trang phải: **mở Settings → Go to page N → đóng Settings**
-   (đóng để menu không che ảnh khi chụp).
+2. **Đi qua từng trang reader:** click trực tiếp nút `[aria-label="Go to page N"]` trên thanh tiến
+   trình (`.rpage-progress__seg`), có fallback mở menu Settings đối với các phiên bản reader cũ.
 
 3. **Nhận biết trang đã sẵn sàng:** chờ xuất hiện **1 request ảnh CDN mới** (bắt
    **MỌI** request, vì có trang tải qua `image` lẫn `fetch`→blob — chỉ nghe `image`
@@ -275,8 +276,10 @@ GraPara! (ch1=40, ch2=28, ch120=19), Dandadan (250 chương, ch1=62), Witch Hat 
 
 4. **Lấy ảnh — TỰ THÍCH NGHI theo từng trang** (xem phần tử đang hiển thị qua
    `JS_MAIN_INFO` = phần tử ảnh lớn nhất phủ tâm viewport):
-   - **`<img>` src CDN http** → trang **KHÔNG xáo** → **tải thẳng** (urllib + Referer).
-     Nhanh nhất, file webp gốc nhẹ.
+   - **`<img>` src CDN http** → trang **KHÔNG xáo** → **tải thẳng** (urllib, **không gửi Referer comix.to**
+     vì CDN sẽ chặn 403 Forbidden nếu có Referer). Nhanh nhất, file webp gốc nhẹ (~180KB).
+   - **Fetch in-page fallback:** nếu urllib bị chặn hoặc lỗi mạng, fetch ngay trong ngữ cảnh trang
+     bằng `fetch(url)` → arrayBuffer → base64.
    - **`<img>` src `blob:`** → **fetch bytes trong trang** (`fetch(blobUrl)`→arrayBuffer
      →base64). Blob same-origin nên đọc được.
    - **`<canvas>` / lỗi** → **CHỤP MÀN HÌNH phần tử** (`element.screenshot()`), đây là
