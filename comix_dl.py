@@ -214,13 +214,12 @@ _GOTO_PAGE = r"""(n) => {
 
 
 def capture_chapter(page, chapter_url, site_host, sink, ch_dir):
-    """Lat qua tung trang (tin cay - bat anh CDN moi de biet trang da tai), roi
-    MOI TRANG TU CHON cach lay anh:
-      - img src CDN truc tiep  -> tai thang (urllib, khong Referer) : nhanh, file webp nhe.
-      - fetch blob / in-page   -> fetch bytes trong trang.
-      - canvas / loi           -> CHUP screenshot (truong hop bi xao tron).
-    Nho the: bo KHONG xao -> phan lon tai thang (nhanh); bo bi xao -> tu chup."""
+    """Lat qua tung trang nhanh chong (40ms polling), thu thap URL anh va
+    tai song song da luong (ThreadPoolExecutor). Neu la anh xao tron (canvas/blob),
+    tu dong fallback sang chup screenshot hoac fetch blob in-page."""
     import base64
+    from concurrent.futures import ThreadPoolExecutor
+
     sink.clear()
     try:
         page.goto(chapter_url, wait_until="networkidle", timeout=30000)
@@ -229,57 +228,112 @@ def capture_chapter(page, chapter_url, site_host, sink, ch_dir):
             page.goto(chapter_url, wait_until="domcontentloaded", timeout=15000)
         except Exception:
             pass
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(1500)
     total = page.evaluate(JS_TOTAL) or 1
     ch_dir.mkdir(parents=True, exist_ok=True)
 
-    saved, seen, idx = [], set(), 1
+    # 1. Quet nhanh URL va loai anh tung trang (40ms polling)
+    page_items = []  # list of [n, kind, src, data, ext]
     for n in range(1, total + 1):
         if total > 1:
             page.evaluate(_GOTO_PAGE, n)
-            page.wait_for_timeout(200)
-        # cho trang moi tai (xuat hien 1 anh CDN moi) -> tin hieu trang da san sang
-        for _ in range(30):
-            page.wait_for_timeout(200)
-            if any(is_content_img(u, site_host) and u not in seen for u in sink):
-                for u in sink:
-                    if is_content_img(u, site_host):
-                        seen.add(u)
+
+        info = {}
+        for _ in range(25):
+            page.wait_for_timeout(40)
+            info = page.evaluate(JS_MAIN_INFO) or {}
+            src = info.get("src", "")
+            tag = info.get("tag", "")
+            if tag == "canvas":
                 break
-        page.wait_for_timeout(600)              # cho ve / giai xao xong
-        info = page.evaluate(JS_MAIN_INFO) or {}
-        src = info.get("src", "") if info.get("tag") == "img" else ""
-        data, ct = b"", ""
-        # 1) thu cach NHANH (tai thang / fetch blob)
+            if src and (src.startswith("http") or src.startswith("blob:")):
+                break
+
+        tag = info.get("tag", "")
+        src = info.get("src", "")
+
+        # Truong hop blob: fetch truc tiep in-page
+        if src.startswith("blob:"):
+            try:
+                b64 = page.evaluate(_JS_FETCH_BLOB, src)
+                data = base64.b64decode(b64) if b64 else b""
+                page_items.append([n, "bytes", None, data, ".webp"])
+            except Exception:
+                page_items.append([n, "canvas", None, b"", None])
+        # Truong hop canvas (bi xao tron) hoac khong co src -> chup man hinh
+        elif tag == "canvas" or not src:
+            page.wait_for_timeout(200)
+            try:
+                el = page.evaluate_handle(JS_PAGE_EL).as_element()
+                data = el.screenshot() if el else b""
+                page_items.append([n, "bytes", None, data, ".png"])
+            except Exception:
+                page_items.append([n, "error", None, b"", ".jpg"])
+        else:
+            # Anh HTTP CDN truc tiep -> danh dau de tai song song
+            page_items.append([n, "http", src, b"", None])
+
+        print(f"\r      quet trang {n}/{total}", end="", flush=True)
+    print()
+
+    # 2. Tai song song da luong tat ca anh HTTP CDN
+    def _fetch_worker(item):
+        n, kind, src, _, _ = item
+        if kind != "http" or not src:
+            return n, b"", ""
         try:
-            if src.startswith("http") and is_content_img(src, site_host):
-                data, ct = download_img(src)
-            elif src.startswith("blob:"):
-                data, ct = base64.b64decode(page.evaluate(_JS_FETCH_BLOB, src)), ""
+            data, ct = download_img(src)
+            return n, data, ct
         except Exception:
-            data = b""
-        # 1.5) Neu urllib fail (vd bi chan hoac 403), thu fetch ngay trong trang (in-page fetch)
-        if len(data) < 800 and src.startswith("http"):
+            return n, b"", ""
+
+    http_items = [it for it in page_items if it[1] == "http"]
+    dl_map = {}
+    if http_items:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            results = ex.map(_fetch_worker, http_items)
+            for n, data, ct in results:
+                dl_map[n] = (data, ct)
+
+    # 3. Ghi file theo thu tu va xu ly fallback neu tai loi
+    saved = []
+    for idx, it in enumerate(page_items, 1):
+        n, kind, src, data, ext = it
+        ct = ""
+        if kind == "http":
+            data, ct = dl_map.get(n, (b"", ""))
+            ext = ext_from(ct, data) if data else ".webp"
+
+        # Fallback 1: Neu download HTTP bi loi -> thu fetch in-page
+        if len(data or b"") < 800 and src and src.startswith("http"):
             try:
                 b64 = page.evaluate(_JS_FETCH_BLOB, src)
                 if b64:
-                    data, ct = base64.b64decode(b64), ""
+                    data = base64.b64decode(b64)
+                    ext = ".webp"
             except Exception:
                 pass
-        # 2) khong duoc (canvas / loi) -> CHUP man hinh (luon co anh -> khong sot trang)
-        if len(data) < 800:
+
+        # Fallback 2: Neu van chua co anh -> chuyen toi trang do va chup man hinh
+        if len(data or b"") < 800:
             try:
+                page.evaluate(_GOTO_PAGE, n)
+                page.wait_for_timeout(300)
                 el = page.evaluate_handle(JS_PAGE_EL).as_element()
                 if el:
-                    data, ct = el.screenshot(), "image/png"
+                    data = el.screenshot()
+                    ext = ".png"
             except Exception:
-                data = b""
-        if len(data) >= 800:
-            fp = ch_dir / f"{str(idx).zfill(3)}{ext_from(ct, data)}"
-            fp.write_bytes(data)
-            saved.append(fp)
-            idx += 1
-            print(f"\r      trang {idx - 1}/{total}", end="", flush=True)
+                pass
+
+        if len(data or b"") < 800:
+            continue
+
+        fp = ch_dir / f"{str(idx).zfill(3)}{ext or '.webp'}"
+        fp.write_bytes(data)
+        saved.append(fp)
+        print(f"\r      luu trang {idx}/{total}", end="", flush=True)
+
     print()
     return saved
 
